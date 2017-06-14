@@ -1,0 +1,112 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#include "UnityCG.cginc"
+#include "SimplexNoiseGrad3D.cginc"
+
+struct triangleMeshRaw
+{
+	float4 triPos; // pos + scale
+	float4 triNorms; // normals + life
+	float2 triUVs;
+};
+
+float SmootherStep(float t)
+{
+	//SMOOTHERSTEP 
+	return t * t * t * (t * (6.0 * t - 15.0) + 10.0);
+}
+
+float Random(float u, float v)
+{
+	float f = dot(float2(12.9898, 78.233), float2(u, v));
+	return frac(43758.5453 * sin(f));
+}
+
+float3 RandomPoint(float id)
+{
+	float u = Random(id * 0.01334, 0.3728) * UNITY_PI * 2;
+	float z = Random(0.8372, id * 0.01197) * 2 - 1;
+	return float3(float2(cos(u), sin(u)) * sqrt(1 - z * z), z);
+}
+
+float4x4 rotate(float3 r, float4 d) // r=rotations axes
+{
+	float cx, cy, cz, sx, sy, sz;
+	sincos(r.x, sx, cx);
+	sincos(r.y, sy, cy);
+	sincos(r.z, sz, cz);
+	return float4x4(cy*cz, -cy*sz, sy, d.x,
+		cx*sz + cz*sx*sy, cx*cz - sx*sy*sz, -cy*sx, d.y,
+		sx*sz - cx*cz*sy, cx*sy*sz + cz*sx, cx*cy, d.z,
+		0, 0, 0, 1);
+}
+
+RWStructuredBuffer<triangleMeshRaw> _triBuffer;
+float Time;
+float noiseAmp;
+float3 forceVec;
+float4 rotationAmp;
+float maxLife;
+
+
+[numthreads(8,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	int idx1 = id * 3;
+	int idx2 = id * 3 + 1;
+	int idx3 = id * 3 + 2;
+
+	float3 n1 = _triBuffer[idx1].triNorms;
+	float3 n2 = _triBuffer[idx2].triNorms;
+	float3 n3 = _triBuffer[idx3].triNorms;
+
+	float3 fNorm = (n1 + n2 + n3) / 3;
+	//fNorm * 0.005 +
+	//float3 vel =  float3(snoise(_triBuffer[idx1].triPos*Time + 11), snoise(_triBuffer[idx2].triPos*Time + 12), snoise(_triBuffer[idx3].triPos*Time + 15.0)) * 0.001;; //  snoise(_triBuffer[idx1].triPos.w) * 0.001;
+	float3 snoiz = float3(snoise(_triBuffer[idx1].triPos * 0.029 + Time*0.01 + idx1), snoise(_triBuffer[idx2].triPos * 0.059 + Time*0.005 + idx2), snoise(_triBuffer[idx3].triPos * 0.09 + Time * 0.008 + idx3));
+	float3 vel = snoiz * 0.0001 * noiseAmp;
+	float3 v1 = _triBuffer[idx1].triPos.xyz + vel.xyz + forceVec * 0.001;
+	float3 v2 = _triBuffer[idx2].triPos.xyz + vel.xyz + forceVec * 0.001;
+	float3 v3 = _triBuffer[idx3].triPos.xyz + vel.xyz + forceVec * 0.001;
+
+
+	float3 orig = (v1 + v2 + v3) / 3.0;
+	float3 realOrigin = float3(0, 0, 0);
+
+	//translate
+	float3 v1triOriginDiff = orig - v1.xyz;
+	float3 v1originDiff = orig - realOrigin;
+	v1 = float4(realOrigin - v1triOriginDiff, 1); //tri point relative to real origin
+
+	float3 v2triOriginDiff = orig - v2.xyz;
+	float3 v2originDiff = orig - realOrigin;
+	v2 = float4(realOrigin - v2triOriginDiff, 1); //tri point relative to real origin
+
+	float3 v3triOriginDiff = orig - v3.xyz;
+	float3 v3originDiff = orig - realOrigin;
+	v3 = float4(realOrigin - v3triOriginDiff, 1); //tri point relative to real origin
+
+	//now rotate
+	float4x4 rot_mat;
+	//rot_mat = rotate(float3(0, 0.01 * sin(snoise(translVec+id.x)), 0) + _Time.y + id, float4(0,0,0,1));
+	rot_mat = rotate(float4(snoiz, 1)* 0.001 * rotationAmp, float4(0, 0, 0, 1));
+	v1 = mul(rot_mat, v1);
+	v2 = mul(rot_mat, v2);
+	v3 = mul(rot_mat, v3);
+	n1 = mul(rot_mat, n1);
+	n2 = mul(rot_mat, n2);
+	n3 = mul(rot_mat, n3);
+
+	//translate back
+	v1 = v1 + v1originDiff;
+	v2 = v2 + v2originDiff;
+	v3 = v3 + v3originDiff;
+
+	// assign
+	_triBuffer[idx1].triPos.xyz = v1;
+	_triBuffer[idx2].triPos.xyz = v2;
+	_triBuffer[idx3].triPos.xyz = v3;
+	_triBuffer[idx1].triNorms.xyz = n1;
+	_triBuffer[idx2].triNorms.xyz = n2;
+	_triBuffer[idx3].triNorms.xyz = n3;
+}
