@@ -1,6 +1,5 @@
 //
-// Common parts of Spray shaders
-//
+// Copyright (c) 2016 Keijiro Takahashi
 
 sampler2D _PositionBuffer;
 sampler2D _RotationBuffer;
